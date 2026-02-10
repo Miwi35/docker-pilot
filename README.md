@@ -30,7 +30,7 @@ sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1 gir1.2-notify-0.7
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USER/docker-pilot.git
+git clone https://github.com/Miwi35/docker-pilot.git
 cd docker-pilot
 ./install.sh
 ```
