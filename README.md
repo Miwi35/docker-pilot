@@ -43,6 +43,18 @@ This creates a `docker-pilot` launcher in `~/.local/bin` and an autostart deskto
 docker-pilot
 ```
 
+### Autostart on login
+
+The installer creates a desktop entry at `~/.config/autostart/docker-pilot.desktop` that launches Docker Pilot automatically when you log in (with a 5-second delay to let the desktop settle).
+
+To disable autostart, remove the file:
+
+```bash
+rm ~/.config/autostart/docker-pilot.desktop
+```
+
+To re-enable it, run `./install.sh` again.
+
 ## Uninstall
 
 ```bash
