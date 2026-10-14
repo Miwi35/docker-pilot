@@ -18,6 +18,8 @@ gi.require_version("Notify", "0.7")
 
 from gi.repository import AyatanaAppIndicator3, GLib, Gtk, Notify
 
+from menu_sync import SEPARATOR, Entry, MenuSync, disabled
+
 # --- Constants ---
 
 APP_ID = "docker-pilot"
@@ -379,39 +381,34 @@ class DockerPilotIndicator:
         )
         self.indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
 
+        self.menu = Gtk.Menu()
+        self.menu_sync = MenuSync(Gtk)
+        self.indicator.set_menu(self.menu)  # once: from here on the menu is only edited in place
         self._build_loading_menu()
         self._schedule_refresh()
         GLib.timeout_add_seconds(REFRESH_INTERVAL_SECONDS, self._on_refresh_timer)
 
     # --- Menu building ---
+    # The menu is described as entries and synced in place (menu_sync): never rebuilt, so it does not blink and
+    # gnome-shell does not grow with each refresh.
+
+    def _show(self, entries: list[Entry]):
+        self.menu_sync.sync(self.menu, entries)
 
     def _build_loading_menu(self):
-        menu = Gtk.Menu()
-        self._add_disabled_item(menu, "Loading...")
-        menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", self._on_quit_clicked)
-        menu.append(quit_item)
-        menu.show_all()
-        self.indicator.set_menu(menu)
+        self._show([disabled("Loading..."), SEPARATOR, Entry("Quit", action=self._on_quit_clicked)])
 
     def _build_menu(self):
-        menu = Gtk.Menu()
+        menu: list[Entry] = []
         state = self.state
 
         if not state.docker_available:
-            self._add_disabled_item(
-                menu, state.error_message or "Docker is not running"
-            )
-            menu.append(Gtk.SeparatorMenuItem())
-            refresh_item = Gtk.MenuItem(label="Refresh Now")
-            refresh_item.connect("activate", self._on_refresh_clicked)
-            menu.append(refresh_item)
-            quit_item = Gtk.MenuItem(label="Quit")
-            quit_item.connect("activate", self._on_quit_clicked)
-            menu.append(quit_item)
-            menu.show_all()
-            self.indicator.set_menu(menu)
+            self._show([
+                disabled(state.error_message or "Docker is not running"),
+                SEPARATOR,
+                Entry("Refresh Now", action=self._on_refresh_clicked),
+                Entry("Quit", action=self._on_quit_clicked),
+            ])
             return
 
         running = [p for p in state.projects if p.is_running]
@@ -426,64 +423,33 @@ class DockerPilotIndicator:
         visible = sorted_projects[:MENU_MAX_PROJECTS]
         for project in visible:
             status = STATUS_ICONS[project.health_status]
-            item = Gtk.MenuItem(label=f"{status}  {project.name}")
-            item.set_submenu(self._build_project_submenu(project))
-            menu.append(item)
+            menu.append(Entry(f"{status}  {project.name}", children=self._build_project_submenu(project)))
 
         if len(sorted_projects) > MENU_MAX_PROJECTS:
-            see_all_item = Gtk.MenuItem(
-                label=f"See All ({len(sorted_projects)} projects)..."
-            )
-            see_all_item.connect(
-                "activate", self._on_see_all_clicked, sorted_projects
-            )
-            menu.append(see_all_item)
+            menu.append(Entry(
+                f"See All ({len(sorted_projects)} projects)...",
+                action=lambda item, projects=sorted_projects: self._on_see_all_clicked(item, projects),
+            ))
 
         # Port conflicts
         if state.port_conflicts:
-            self._add_separator(menu)
-            conflicts_menu = Gtk.Menu()
-            for port, projs in state.port_conflicts.items():
-                self._add_disabled_item(
-                    conflicts_menu, f":{port} used by: {', '.join(projs)}"
-                )
-            conflicts_item = Gtk.MenuItem(
-                label=f"Port Conflicts ({len(state.port_conflicts)})"
-            )
-            conflicts_item.set_submenu(conflicts_menu)
-            menu.append(conflicts_item)
+            menu.append(SEPARATOR)
+            conflicts = [disabled(f":{port} used by: {', '.join(projs)}")
+                         for port, projs in state.port_conflicts.items()]
+            menu.append(Entry(f"Port Conflicts ({len(state.port_conflicts)})", children=conflicts))
 
-        self._add_separator(menu)
+        menu.append(SEPARATOR)
 
-        # Stop All
         if running:
-            stop_all_item = Gtk.MenuItem(label="Stop All")
-            if self.busy:
-                stop_all_item.set_sensitive(False)
-            else:
-                stop_all_item.connect("activate", self._on_stop_all_clicked)
-            menu.append(stop_all_item)
+            menu.append(Entry("Stop All", sensitive=not self.busy, action=self._on_stop_all_clicked))
+        menu.append(Entry("Refresh Now", action=self._on_refresh_clicked))
+        menu.append(Entry("Settings", action=self._on_settings_clicked))
+        menu.append(Entry("Quit", action=self._on_quit_clicked))
 
-        # Refresh Now
-        refresh_item = Gtk.MenuItem(label="Refresh Now")
-        refresh_item.connect("activate", self._on_refresh_clicked)
-        menu.append(refresh_item)
+        self._show(menu)
 
-        # Settings
-        settings_item = Gtk.MenuItem(label="Settings")
-        settings_item.connect("activate", self._on_settings_clicked)
-        menu.append(settings_item)
-
-        # Quit
-        quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", self._on_quit_clicked)
-        menu.append(quit_item)
-
-        menu.show_all()
-        self.indicator.set_menu(menu)
-
-    def _build_project_submenu(self, project: Project) -> Gtk.Menu:
-        submenu = Gtk.Menu()
+    def _build_project_submenu(self, project: Project) -> list[Entry]:
+        submenu: list[Entry] = []
 
         if project.containers:
             for container in project.containers:
@@ -491,64 +457,22 @@ class DockerPilotIndicator:
                 port_info = ""
                 if container.host_ports:
                     port_info = "  :" + ", :".join(container.host_ports)
-                self._add_disabled_item(
-                    submenu, f"{icon}  {container.service}{port_info}"
-                )
-            self._add_separator(submenu)
+                submenu.append(disabled(f"{icon}  {container.service}{port_info}"))
+            submenu.append(SEPARATOR)
+
+        def on(handler):
+            return lambda item: handler(item, project)
 
         if project.is_running:
-            stop_item = Gtk.MenuItem(label="Stop")
-            restart_item = Gtk.MenuItem(label="Restart")
-            if self.busy:
-                stop_item.set_sensitive(False)
-                restart_item.set_sensitive(False)
-            else:
-                stop_item.connect(
-                    "activate", self._on_stop_clicked, project
-                )
-                restart_item.connect(
-                    "activate", self._on_restart_clicked, project
-                )
-            submenu.append(stop_item)
-            submenu.append(restart_item)
+            submenu.append(Entry("Stop", sensitive=not self.busy, action=on(self._on_stop_clicked)))
+            submenu.append(Entry("Restart", sensitive=not self.busy, action=on(self._on_restart_clicked)))
         else:
-            has_running = any(p.is_running for p in self.state.projects)
-            if has_running:
-                switch_item = Gtk.MenuItem(label="Switch to")
-                if self.busy:
-                    switch_item.set_sensitive(False)
-                else:
-                    switch_item.connect(
-                        "activate", self._on_switch_clicked, project
-                    )
-                submenu.append(switch_item)
-            start_item = Gtk.MenuItem(label="Start")
-            if self.busy:
-                start_item.set_sensitive(False)
-            else:
-                start_item.connect(
-                    "activate", self._on_start_clicked, project
-                )
-            submenu.append(start_item)
+            if any(p.is_running for p in self.state.projects):
+                submenu.append(Entry("Switch to", sensitive=not self.busy, action=on(self._on_switch_clicked)))
+            submenu.append(Entry("Start", sensitive=not self.busy, action=on(self._on_start_clicked)))
 
-        open_item = Gtk.MenuItem(label="Open Folder")
-        open_item.connect("activate", self._on_open_folder_clicked, project)
-        submenu.append(open_item)
-
-        submenu.show_all()
+        submenu.append(Entry("Open Folder", action=on(self._on_open_folder_clicked)))
         return submenu
-
-    # --- Menu helpers ---
-
-    @staticmethod
-    def _add_disabled_item(menu: Gtk.Menu, label: str):
-        item = Gtk.MenuItem(label=label)
-        item.set_sensitive(False)
-        menu.append(item)
-
-    @staticmethod
-    def _add_separator(menu: Gtk.Menu):
-        menu.append(Gtk.SeparatorMenuItem())
 
     # --- Refresh mechanism ---
 
