@@ -56,7 +56,16 @@ class FakeItem:
 
 class FakeMenu:
     def __init__(self):
-        self.children = []
+        self.children, self.destroyed = [], False
+
+    def append(self, item):
+        self.children.append(item)
+
+    def show_all(self):
+        pass
+
+    def destroy(self):
+        self.destroyed = True
 
     def get_children(self):
         return list(self.children)
@@ -90,61 +99,59 @@ def labels(menu):
 
 class MenuSyncTest(unittest.TestCase):
     def setUp(self):
-        self.sync = MenuSync(FakeGtk)
-        self.menu = FakeMenu()
+        self.shown = []
+        self.sync = MenuSync(FakeGtk, self.shown.append)
+
+    @property
+    def menu(self):
+        return self.shown[-1]
 
     def test_a_changed_label_updates_the_same_item(self):
-        self.sync.sync(self.menu, [disabled("dev 1/2"), SEPARATOR, Entry("Quit")])
+        self.sync.show([disabled("dev 1/2"), SEPARATOR, Entry("Quit")])
         before = list(self.menu.children)
         made = FakeItem.created
-        self.sync.sync(self.menu, [disabled("dev 2/2"), SEPARATOR, Entry("Quit")])
+        self.sync.show([disabled("dev 2/2"), SEPARATOR, Entry("Quit")])
+        self.assertEqual(len(self.shown), 1)
         self.assertEqual(self.menu.children, before)
         self.assertEqual(FakeItem.created, made)
         self.assertEqual(labels(self.menu)[0], "dev 2/2")
 
-    def test_rows_added_and_removed_at_the_end_touch_nothing_else(self):
-        self.sync.sync(self.menu, [disabled("a"), disabled("b")])
-        first = self.menu.children[0]
-        self.sync.sync(self.menu, [disabled("a"), disabled("b"), disabled("c")])
-        self.assertIs(self.menu.children[0], first)
-        removed = self.menu.children[2]
-        self.sync.sync(self.menu, [disabled("a")])
-        self.assertEqual(labels(self.menu), ["a"])
-        self.assertTrue(removed.destroyed)
-        self.assertIs(self.menu.children[0], first)
+    def test_a_row_added_or_gone_builds_a_new_menu_and_destroys_the_old(self):
+        self.sync.show([disabled("a")])
+        first = self.menu
+        self.sync.show([disabled("a"), disabled("b")])
+        self.assertEqual(len(self.shown), 2)
+        self.assertIsNot(self.menu, first)
+        self.assertTrue(first.destroyed)
+        self.assertEqual(labels(self.menu), ["a", "b"])
 
-    def test_a_row_of_another_kind_is_replaced(self):
-        self.sync.sync(self.menu, [disabled("a"), Entry("b")])
-        self.sync.sync(self.menu, [disabled("a"), SEPARATOR])
-        self.assertEqual(len(self.menu.children), 2)
-        self.assertEqual(self.sync._kind[self.menu.children[1]], "sep")
-
-    def test_a_submenu_is_kept_and_updated_in_place(self):
-        self.sync.sync(self.menu, [Entry("MAG-1", children=[disabled("x"), disabled("y")])])
-        sub = self.menu.children[0].submenu
-        self.sync.sync(self.menu, [Entry("MAG-1", children=[disabled("x"), disabled("z")])])
-        self.assertIs(self.menu.children[0].submenu, sub)
-        self.assertEqual(labels(sub), ["x", "z"])
+    def test_a_submenu_change_of_shape_rebuilds_but_a_label_does_not(self):
+        self.sync.show([Entry("MAG-1", children=[disabled("x"), disabled("y")])])
+        self.sync.show([Entry("MAG-1", children=[disabled("x"), disabled("z")])])
+        self.assertEqual(len(self.shown), 1)
+        self.assertEqual(labels(self.menu.children[0].submenu), ["x", "z"])
+        self.sync.show([Entry("MAG-1", children=[disabled("x")])])
+        self.assertEqual(len(self.shown), 2)
 
     def test_the_click_runs_the_latest_action(self):
         seen = []
-        self.sync.sync(self.menu, [Entry("open", action=lambda _i: seen.append("old"))])
-        self.sync.sync(self.menu, [Entry("open", action=lambda _i: seen.append("new"))])
+        self.sync.show([Entry("open", action=lambda _i: seen.append("old"))])
+        self.sync.show([Entry("open", action=lambda _i: seen.append("new"))])
         self.menu.children[0].click()
         self.assertEqual(seen, ["new"])
 
     def test_syncing_a_check_item_does_not_fire_it(self):
         seen = []
-        self.sync.sync(self.menu, [Entry("auto", check=True, active=False, action=lambda i: seen.append(i.active))])
-        self.sync.sync(self.menu, [Entry("auto", check=True, active=True, action=lambda i: seen.append(i.active))])
+        self.sync.show([Entry("auto", check=True, active=False, action=lambda i: seen.append(i.active))])
+        self.sync.show([Entry("auto", check=True, active=True, action=lambda i: seen.append(i.active))])
         self.assertEqual(seen, [])
+        self.assertTrue(self.menu.children[0].active)
         self.menu.children[0].set_active(False)  # the owner unticks it
         self.assertEqual(seen, [False])
 
-    def test_dropped_items_are_forgotten(self):
-        self.sync.sync(self.menu, [Entry("t", children=[Entry("open", action=print)])])
-        self.sync.sync(self.menu, [])
-        self.assertEqual(self.sync._kind, {})
+    def test_a_rebuild_forgets_the_old_items(self):
+        self.sync.show([Entry("t", children=[Entry("open", action=print)])])
+        self.sync.show([])
         self.assertEqual(self.sync._action, {})
 
 

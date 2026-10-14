@@ -381,19 +381,17 @@ class DockerPilotIndicator:
         )
         self.indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
 
-        self.menu = Gtk.Menu()
-        self.menu_sync = MenuSync(Gtk)
-        self.indicator.set_menu(self.menu)  # once: from here on the menu is only edited in place
+        self.menu_sync = MenuSync(Gtk, self.indicator.set_menu)
         self._build_loading_menu()
         self._schedule_refresh()
         GLib.timeout_add_seconds(REFRESH_INTERVAL_SECONDS, self._on_refresh_timer)
 
     # --- Menu building ---
-    # The menu is described as entries and synced in place (menu_sync): never rebuilt, so it does not blink and
-    # gnome-shell does not grow with each refresh.
+    # The menu is described as entries (menu_sync): a label or state that changes is updated in place, without
+    # blinking; the menu is built anew only when rows appear or go.
 
     def _show(self, entries: list[Entry]):
-        self.menu_sync.sync(self.menu, entries)
+        self.menu_sync.show(entries)
 
     def _build_loading_menu(self):
         self._show([disabled("Loading..."), SEPARATOR, Entry("Quit", action=self._on_quit_clicked)])
